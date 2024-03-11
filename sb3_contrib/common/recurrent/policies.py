@@ -429,6 +429,57 @@ class RecurrentActorCriticPolicy(ActorCriticPolicy):
             actions = actions.squeeze(axis=0)
 
         return actions, states
+    
+    def get_action_prob(
+        self,
+        observation: Union[np.ndarray, Dict[str, np.ndarray]],
+        actions: Union[np.ndarray, Dict[str, np.ndarray]],
+        state: Optional[Tuple[np.ndarray, ...]] = None,
+        episode_start: Optional[np.ndarray] = None,
+    ) -> Tuple[np.ndarray, Optional[Tuple[np.ndarray, ...]]]:
+        """
+        Get the policy action distribution from an observation (and optional hidden state).
+        Includes sugar-coating to handle different observations (e.g. normalizing images).
+
+        :param observation: the input observation
+        :param lstm_states: The last hidden and memory states for the LSTM.
+        :param episode_starts: Whether the observations correspond to new episodes
+            or not (we reset the lstm states in that case).
+        :param deterministic: Whether or not to return deterministic actions.
+        :return: the model's action and the next hidden state (as torch tensor)
+            (used in recurrent policies)
+        """
+        # Switch to eval mode (this affects batch norm / dropout)
+        self.set_training_mode(False)
+
+        observation, vectorized_env = self.obs_to_tensor(observation)
+
+        if isinstance(observation, dict):
+            n_envs = observation[next(iter(observation.keys()))].shape[0]
+        else:
+            n_envs = observation.shape[0]
+        # state : (n_layers, n_envs, dim)
+        if state is None:
+            # Initialize hidden states to zeros
+            state = np.concatenate([np.zeros(self.lstm_hidden_state_shape) for _ in range(n_envs)], axis=1)
+            state = (state, state)
+
+        if episode_start is None:
+            episode_start = np.array([False for _ in range(n_envs)])
+
+        with th.no_grad():
+            # Convert to PyTorch tensors
+            states = th.tensor(state[0], dtype=th.float32, device=self.device), th.tensor(
+                state[1], dtype=th.float32, device=self.device
+            )
+            episode_starts = th.tensor(episode_start, dtype=th.float32, device=self.device)
+            distribution, states = self.get_distribution(observation, states, episode_starts)
+            states = (states[0].cpu().numpy(), states[1].cpu().numpy())
+
+        actions_th = th.tensor(actions, device=self.device)
+        probs = distribution.log_prob(actions_th).exp()
+
+        return probs, states
 
 
 class RecurrentActorCriticCnnPolicy(RecurrentActorCriticPolicy):
