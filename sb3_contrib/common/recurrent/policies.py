@@ -430,10 +430,9 @@ class RecurrentActorCriticPolicy(ActorCriticPolicy):
 
         return actions, states
     
-    def get_action_prob(
+    def get_distr_eval(
         self,
         observation: Union[np.ndarray, Dict[str, np.ndarray]],
-        actions: Union[np.ndarray, Dict[str, np.ndarray]],
         state: Optional[Tuple[np.ndarray, ...]] = None,
         episode_start: Optional[np.ndarray] = None,
     ) -> Tuple[np.ndarray, Optional[Tuple[np.ndarray, ...]]]:
@@ -476,8 +475,34 @@ class RecurrentActorCriticPolicy(ActorCriticPolicy):
             distribution, states = self.get_distribution(observation, states, episode_starts)
             states = (states[0].cpu().numpy(), states[1].cpu().numpy())
 
+        return distribution, states
+
+    def get_action_prob(
+        self,
+        observation: Union[np.ndarray, Dict[str, np.ndarray]],
+        actions: Union[np.ndarray, Dict[str, np.ndarray]],
+        state: Optional[Tuple[np.ndarray, ...]] = None,
+        episode_start: Optional[np.ndarray] = None,
+    ) -> Tuple[np.ndarray, Optional[Tuple[np.ndarray, ...]]]:
+        """
+        Get the policy action distribution from an observation (and optional hidden state).
+        Includes sugar-coating to handle different observations (e.g. normalizing images).
+
+        :param observation: the input observation
+        :param lstm_states: The last hidden and memory states for the LSTM.
+        :param episode_starts: Whether the observations correspond to new episodes
+            or not (we reset the lstm states in that case).
+        :param deterministic: Whether or not to return deterministic actions.
+        :return: the model's action and the next hidden state (as torch tensor)
+            (used in recurrent policies)
+        """
+        # Switch to eval mode (this affects batch norm / dropout)
+        self.set_training_mode(False)
+
+        distribution, states = self.get_distr_eval(observation, state, episode_start)
         actions_th = th.tensor(actions, device=self.device)
-        probs = distribution.log_prob(actions_th).exp()
+        #probs = distribution.log_prob(actions_th).exp()
+        probs = th.gather(distribution.distribution.probs, 1, actions_th.unsqueeze(-1)).squeeze()
 
         return probs, states
 
